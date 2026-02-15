@@ -3,7 +3,7 @@ import PricingCard from "./PricingCard";
 
 export default function Pricing() {
   return (
-    <section className="py-24 bg-gray-50">
+    <section id="pricing" className="py-24 bg-gray-50">
       <div className="max-w-6xl mx-auto px-6 text-center">
 
         {/* Section Title */}

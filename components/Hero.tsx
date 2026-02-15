@@ -1,7 +1,7 @@
 
 export default function Hero() {
   return (
-    <section className="text-center py-20 bg-indigo-50">
+    <section className="text-center py-50 bg-indigo-50">
       <h2 className="text-4xl font-extrabold mb-4">
         CLIPER – Smart Growth for Teams
       </h2>

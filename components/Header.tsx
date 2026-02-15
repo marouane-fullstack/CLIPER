@@ -3,7 +3,7 @@ export default function Header() {
 
     return (
 
-    <header className="absolute top-0 left-0 w-full z-50">
+    <header className="fixed bg-indigo-600 top-0 left-0 w-full z-50">
       <div className="max-w-6xl mx-auto px-6 py-6 flex justify-between items-center">
         <h1 className="text-2xl font-bold text-white">
           CLIPER
@@ -22,7 +22,7 @@ export default function Header() {
         </nav>
       </div>
     </header>
-    
+
   );
 
 }
