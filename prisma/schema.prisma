@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Clip {
+  id            String     @id
+  videoId       String
+  startTime     Float
+  endTime       Float
+  reason        String?
+  captionSrt    String?
+  cloudinaryUrl String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime
+  status        ClipStatus @default(pending)
+  Video         Video      @relation(fields: [videoId], references: [id])
+}
+
+model ProcessingJob {
+  id         String           @id
+  videoId    String           @unique
+  logs       Json?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  stage      processingStage  @default(extracting_audio)
+  status     ProcessingStatus @default(pending)
+  Video      Video            @relation(fields: [videoId], references: [id])
+}
+
+model User {
+  id                String   @id
+  email             String   @unique
+  name              String?
+  plan              plan     @default(free)
+  monthlyVideosUsed Int      @default(0)
+  monthlyClipsUsed  Int      @default(0)
+  videoLimit        Int      @default(2)
+  clipLimit         Int      @default(6)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime
+  Video             Video[]
+}
+
+model Video {
+  id                  String         @id
+  userId              String
+  originalUrl         String
+  duration            Int
+  rawTranscript       Json
+  optimizedTranscript Json?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime
+  status              VideoStatus    @default(uploaded)
+  Clip                Clip[]
+  ProcessingJob       ProcessingJob?
+  User                User           @relation(fields: [userId], references: [id])
+}
+
+enum ClipStatus {
+  pending
+  processing
+  uploaded
+  error
+}
+
+enum ProcessingStatus {
+  pending
+  processing
+  completed
+  error
+}
+
+enum VideoStatus {
+  uploaded
+  transcribed
+  analyzed
+  clips_processing
+  completed
+}
+
+enum plan {
+  free
+  pro
+  enterprise
+}
+
+enum processingStage {
+  extracting_audio
+  whisper
+  gpt_analysis
+  clipping
+  uploading
+}
