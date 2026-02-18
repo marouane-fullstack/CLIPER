@@ -1,48 +1,44 @@
-"use client"
+"use client";
+
 import { ClerkProvider } from "@clerk/nextjs";
-import { ThemeProvider as NextThemesProvider,useTheme,type ThemeProviderProps } from 'next-themes'
-import { useEffect } from "react";
-import { dark } from '@clerk/themes'
+import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes";
+import { dark } from "@clerk/themes";
 import { Geist, Geist_Mono } from "next/font/google";
 
+const geistSans = Geist({ subsets: ["latin"] });
+const geistMono = Geist_Mono({ subsets: ["latin"] });
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+function ClerkThemeWrapper({ children }: Readonly<{ children: React.ReactNode }>) {
+  const { resolvedTheme } = useTheme();
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
-export default function RootLayoutProvider ({ children, ...props }: Readonly<ThemeProviderProps>)  {
-    
-  const { resolvedTheme, setTheme } = useTheme()
-
-  useEffect(() => {
-    /* 
-     * If you have changed your storageKey in your <ThemeProvider storageKey="" />,
-     * make sure you change it in the localStorage.getItem too.
-     * default key is "theme"
-     */
-    const actualTheme = localStorage.getItem('your-storage-key-theme')
-    setTheme(actualTheme || 'dark')
-  }, [setTheme])
   return (
-    <NextThemesProvider {...props} attribute="class" defaultTheme="dark" enableSystem
-          disableTransitionOnChange >
-    <ClerkProvider appearance={{
-        baseTheme: resolvedTheme === 'dark' ? dark : undefined
-      }}>
-    <html lang="en"  suppressHydrationWarning>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
-      </body>
-    </html>
+    <ClerkProvider
+      appearance={{
+        baseTheme: resolvedTheme === "dark" ? dark : undefined,
+      }}
+    >
+      {children}
     </ClerkProvider>
+  );
+}
+
+export default function RootLayoutProvider({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <NextThemesProvider
+      attribute="class"
+      defaultTheme="dark"
+      enableSystem
+      disableTransitionOnChange
+    >
+      <ClerkThemeWrapper>
+        <div className={`${geistSans.className} ${geistMono.className}`}>
+          {children}
+        </div>
+      </ClerkThemeWrapper>
     </NextThemesProvider>
   );
-};
+}
