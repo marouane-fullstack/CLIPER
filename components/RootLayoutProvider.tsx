@@ -27,7 +27,7 @@ export default function RootLayoutProvider ({ children, ...props }: Readonly<The
      * default key is "theme"
      */
     const actualTheme = localStorage.getItem('your-storage-key-theme')
-    setTheme(actualTheme || 'system')
+    setTheme(actualTheme || 'dark')
   }, [setTheme])
   return (
     <NextThemesProvider {...props} attribute="class" defaultTheme="dark" enableSystem
