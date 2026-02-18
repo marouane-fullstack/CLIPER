@@ -42,7 +42,7 @@ model User {
   videoLimit        Int      @default(2)
   clipLimit         Int      @default(6)
   createdAt         DateTime @default(now())
-  updatedAt         DateTime
+  updatedAt         DateTime @updatedAt
   Video             Video[]
 }
 
