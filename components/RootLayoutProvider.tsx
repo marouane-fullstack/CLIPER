@@ -30,7 +30,7 @@ export default function RootLayoutProvider ({ children, ...props }: Readonly<The
     setTheme(actualTheme || 'system')
   }, [setTheme])
   return (
-    <NextThemesProvider {...props} attribute="class" defaultTheme="system" enableSystem
+    <NextThemesProvider {...props} attribute="class" defaultTheme="dark" enableSystem
           disableTransitionOnChange >
     <ClerkProvider appearance={{
         baseTheme: resolvedTheme === 'dark' ? dark : undefined
