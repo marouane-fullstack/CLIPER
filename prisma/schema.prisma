@@ -8,7 +8,7 @@ datasource db {
 }
 
 model Clip {
-  id            String     @id
+  id            String     @id @default(uuid())
   videoId       String
   startTime     Float
   endTime       Float
@@ -22,7 +22,7 @@ model Clip {
 }
 
 model ProcessingJob {
-  id         String           @id
+  id         String           @id @default(uuid())
   videoId    String           @unique
   logs       Json?
   startedAt  DateTime?
@@ -47,9 +47,10 @@ model User {
 }
 
 model Video {
-  id                  String         @id
+  id                  String         @id @default(uuid())
   userId              String
   originalUrl         String
+  thumbnailUrl        String?
   duration            Int
   rawTranscript       Json
   optimizedTranscript Json?

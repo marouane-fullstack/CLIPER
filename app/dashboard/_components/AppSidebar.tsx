@@ -3,12 +3,10 @@
 import * as React from "react"
 import {
   Command,
-  FolderGit2,
   LayoutDashboard,
   LifeBuoy,
   Play,
   Send,
-  Settings2,
 } from "lucide-react"
 
 import { NavMain } from "./NavMain"
@@ -42,11 +40,6 @@ export const data = {
       title: "Clips",
       url: "/dashboard/clips",
       icon: Play,
-    },
-    {
-      title: "Settings",
-      url: "#",
-      icon: Settings2,
     },
   ],
   navSecondary: [

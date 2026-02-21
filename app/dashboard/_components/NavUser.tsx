@@ -29,11 +29,28 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { useUser } from "@clerk/nextjs"
+import { useClerk, useUser } from "@clerk/nextjs"
+import { useDashboardStore, useDashboardUserSummary } from "@/lib/store/dashboard-store"
 
 export function NavUser() {
   const { isMobile } = useSidebar()
-  const {user} = useUser()
+  const { user } = useUser()
+  const { signOut } = useClerk()
+  const userSummary = useDashboardUserSummary()
+  const setAccountOpen = useDashboardStore((state) => state.setAccountOpen)
+  const setBillingOpen = useDashboardStore((state) => state.setBillingOpen)
+  const setNotificationsOpen = useDashboardStore((state) => state.setNotificationsOpen)
+
+  const fallbackName = user?.fullName || [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'User'
+  const fallbackEmail = user?.emailAddresses[0]?.emailAddress || 'unknown@example.com'
+  const displayName = userSummary?.fullName || fallbackName
+  const displayEmail = userSummary?.email || fallbackEmail
+  let initials = 'CN'
+  if (userSummary?.firstName && userSummary?.lastName) {
+    initials = [userSummary.firstName[0].toUpperCase(), userSummary.lastName[0].toUpperCase()].join('')
+  } else if (user?.firstName && user?.lastName) {
+    initials = [user.firstName[0].toUpperCase(), user.lastName[0].toUpperCase()].join('')
+  }
 
   return (
     <SidebarMenu>
@@ -45,12 +62,12 @@ export function NavUser() {
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <Avatar className="h-8 w-8 rounded-lg">
-                <AvatarImage src={user?.imageUrl} alt={"user profile"} />
-                <AvatarFallback className="rounded-lg">{(user?.firstName && user?.lastName) ? [user?.firstName[0].toUpperCase(),user?.lastName[0].toUpperCase()].join('') : "CN"}</AvatarFallback>
+                <AvatarImage src={userSummary?.imageUrl ?? user?.imageUrl} alt={"user profile"} />
+                <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">{user?.fullName || ([user?.firstName,user?.lastName].join(' '))}</span>
-                <span className="truncate text-xs">{user?.emailAddresses[0].emailAddress}</span>
+                <span className="truncate font-medium">{displayName}</span>
+                <span className="truncate text-xs">{displayEmail}</span>
               </div>
               <ChevronsUpDown className="ml-auto size-4" />
             </SidebarMenuButton>
@@ -64,39 +81,39 @@ export function NavUser() {
             <DropdownMenuLabel className="p-0 font-normal">
               <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                 <Avatar className="h-8 w-8 rounded-lg">
-                  <AvatarImage src={user?.imageUrl} alt={"user profile"} />
-                  <AvatarFallback className="rounded-lg">{(user?.firstName && user?.lastName) ? [user?.firstName[0].toUpperCase(),user?.lastName[0].toUpperCase()].join('') : "CN"}</AvatarFallback>
+                  <AvatarImage src={userSummary?.imageUrl ?? user?.imageUrl} alt={"user profile"} />
+                  <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
                 </Avatar>
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-medium">{user?.fullName || ([user?.firstName,user?.lastName].join(' '))}</span>
-                  <span className="truncate text-xs">{user?.emailAddresses[0].emailAddress}</span>
+                  <span className="truncate font-medium">{displayName}</span>
+                  <span className="truncate text-xs">{displayEmail}</span>
                 </div>
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setBillingOpen(true)}>
                 <Sparkles />
                 Upgrade to Pro
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setAccountOpen(true)}>
                 <BadgeCheck />
                 Account
               </DropdownMenuItem>
-              <DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setBillingOpen(true)}>
                 <CreditCard />
                 Billing
               </DropdownMenuItem>
-              <DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setNotificationsOpen(true)}>
                 <Bell />
                 Notifications
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => signOut({ redirectUrl: '/sign-in' })}>
               <LogOut />
               Log out
             </DropdownMenuItem>

@@ -1,71 +1,385 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, Link as LinkIcon, FileVideo } from 'lucide-react'
+import { Upload, FileVideo, LoaderCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import Link from 'next/link'
 import { toast } from 'sonner'
+import { useDashboardStore } from '@/lib/store/dashboard-store'
+import {
+  type DashboardProject,
+  type VideoMetadataRequest,
+  type VideoMetadataResponse,
+  type VideoService,
+  type VideoStatusResponse,
+  type JobUiStatus,
+} from '@/lib/dashboard/types'
 
 const MAX_SIZE = 500 * 1024 * 1024 // 500MB
 const MAX_DURATION = 15 * 60 // 15 minutes (seconds)
+const MIN_DURATION_FOR_THREE_SHORTS = 3 * 60 // 3 clips x max 60s
 
-export default function Uploader() {
-  const [url, setUrl] = useState('')
-  const [files, setFiles] = useState<File[]>([])
+type SignatureResponse = {
+  timestamp: number
+  signature: string
+  apiKey: string
+  cloudName: string
+  folder?: string
+  publicId?: string | null
+}
 
-  const hasFile = files.length === 1
-  const hasUrl = url.trim().length > 0
+type CloudinaryVideoUploadResponse = {
+  secure_url?: string
+  duration?: number
+  error?: { message?: string }
+}
 
-  const validateVideoDuration = (file: File): Promise<boolean> => {
-    return new Promise((resolve) => {
-      const video = document.createElement('video')
-      video.preload = 'metadata'
+type MetadataErrorResponse = {
+  error?: string
+}
 
-      video.onloadedmetadata = () => {
-        URL.revokeObjectURL(video.src)
-        resolve(video.duration <= MAX_DURATION)
-      }
+function needsThreeShorts(service: VideoService): boolean {
+  return service === 'clipAI' || service === 'captionClipAI'
+}
 
-      video.onerror = () => resolve(false)
-      video.src = URL.createObjectURL(file)
-    })
+function getUploadValidationError(fileDuration: number | null, service: VideoService): string | null {
+  if (fileDuration === null) {
+    return 'Upload a video file first'
   }
 
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    if (acceptedFiles.length !== 1) {
-      toast.error('Only one video file is allowed')
-      return
+  if (needsThreeShorts(service) && fileDuration < MIN_DURATION_FOR_THREE_SHORTS) {
+    return 'Insufficient duration: at least 3 minutes is required to generate 3 clips.'
+  }
+
+  return null
+}
+
+async function resolveSource(params: {
+  file: File
+  service: VideoService
+  setUploadProgress: (value: number | null) => void
+}): Promise<{ originalUrl: string; duration: number }> {
+  const result = await uploadVideoToCloudinaryDirect(params.file, 'videos', {
+    onProgress: (percent) => params.setUploadProgress(percent),
+  })
+
+  const duration = Math.round(result.duration)
+  if (needsThreeShorts(params.service) && duration < MIN_DURATION_FOR_THREE_SHORTS) {
+    throw new Error('Insufficient duration: at least 3 minutes is required to generate 3 clips.')
+  }
+
+  return { originalUrl: result.secureUrl, duration }
+}
+
+async function readVideoDuration(file: File): Promise<number | null> {
+  return new Promise((resolve) => {
+    const video = document.createElement('video')
+    video.preload = 'metadata'
+
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(video.src)
+      resolve(Number.isFinite(video.duration) ? video.duration : null)
     }
 
-    const file = acceptedFiles[0]
+    video.onerror = () => resolve(null)
+    video.src = URL.createObjectURL(file)
+  })
+}
 
-    if (file.size > MAX_SIZE) {
-      toast.error('File too large. Maximum size is 500MB.')
-      return
+function assertSingleVideoFile(fileList: File[]): File {
+  if (fileList.length !== 1) {
+    throw new Error('Only one video file is allowed')
+  }
+  const file = fileList[0]
+  if (file.size > MAX_SIZE) {
+    throw new Error('File too large. Maximum size is 500MB.')
+  }
+  return file
+}
+
+async function fetchUploadSignature(folder: string): Promise<SignatureResponse> {
+  const sigRes = await fetch(`/api/video/signature?folder=${encodeURIComponent(folder)}`)
+  const sigJson = (await sigRes.json()) as Partial<SignatureResponse> & { error?: string }
+  if (!sigRes.ok) {
+    throw new Error(sigJson?.error || 'Failed to get upload signature')
+  }
+  if (!sigJson.timestamp || !sigJson.signature || !sigJson.apiKey || !sigJson.cloudName) {
+    throw new Error('Signature endpoint returned incomplete data')
+  }
+  return sigJson as SignatureResponse
+}
+
+async function uploadVideoToCloudinaryDirect(
+  file: File,
+  folder: string,
+  options?: { onProgress?: (percent: number) => void }
+) {
+  const { timestamp, signature, apiKey, cloudName } = await fetchUploadSignature(folder)
+
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('api_key', apiKey)
+  formData.append('timestamp', timestamp.toString())
+  formData.append('signature', signature)
+  formData.append('folder', folder)
+
+  options?.onProgress?.(0)
+
+  const data = await new Promise<CloudinaryVideoUploadResponse>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`)
+
+    xhr.upload.onprogress = (event) => {
+      if (!options?.onProgress) return
+      if (!event.lengthComputable) return
+      const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)))
+      options.onProgress(percent)
     }
 
-    const validDuration = await validateVideoDuration(file)
-    if (!validDuration) {
-      toast.error('Video too long. Maximum duration is 15 minutes.')
-      return
+    xhr.onload = () => {
+      try {
+        const json = JSON.parse(xhr.responseText) as CloudinaryVideoUploadResponse
+        if (xhr.status >= 200 && xhr.status < 300) {
+          options?.onProgress?.(100)
+          resolve(json)
+          return
+        }
+        reject(new Error(json?.error?.message || 'Cloudinary upload failed'))
+      } catch {
+        reject(new Error('Cloudinary upload failed'))
+      }
     }
 
-    setFiles([file]) // overwrite, never append
-    setUrl('')
-    toast.success('Video file ready')
-  }, [])
+    xhr.onerror = () => reject(new Error('Network error while uploading to Cloudinary'))
+    xhr.send(formData)
+  })
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  if (!data.secure_url) throw new Error('Cloudinary upload succeeded but returned no URL')
+  return { secureUrl: data.secure_url, duration: data.duration ?? 0 }
+}
+
+async function saveVideoMetadata(payload: VideoMetadataRequest) {
+  const controller = new AbortController()
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), 30_000)
+
+  const metaRes = await fetch('/api/video/metadata', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: controller.signal,
+  }).finally(() => globalThis.clearTimeout(timeoutId))
+
+  const metaJson = (await metaRes.json()) as VideoMetadataResponse & MetadataErrorResponse
+  if (!metaRes.ok) {
+    throw new Error(metaJson?.error || 'Metadata save failed')
+  }
+
+  return metaJson as VideoMetadataResponse
+}
+
+export default function Uploader() {
+  const [files, setFiles] = useState<File[]>([])
+  const [fileDuration, setFileDuration] = useState<number | null>(null)
+  const [service, setService] = useState<VideoService>('captionAI')
+  const [language, setLanguage] = useState('')
+  const [activeVideoId, setActiveVideoId] = useState<string | null>(null)
+  const [jobUiStatus, setJobUiStatus] = useState<JobUiStatus | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
+  const [stage, setStage] = useState<'idle' | 'uploading' | 'finalizing'>('idle')
+  const [uploadStartedAt, setUploadStartedAt] = useState<number | null>(null)
+  const prependProject = useDashboardStore((state) => state.prependProject)
+  const updateProjectStatus = useDashboardStore((state) => state.updateProjectStatus)
+
+  const hasFile = files.length === 1
+
+  const uploadEta = (() => {
+    if (!uploadStartedAt || uploadProgress === null || uploadProgress <= 0 || uploadProgress >= 100) {
+      return null
+    }
+    const elapsedSeconds = (Date.now() - uploadStartedAt) / 1000
+    const estimatedTotal = elapsedSeconds / (uploadProgress / 100)
+    const left = Math.max(0, Math.round(estimatedTotal - elapsedSeconds))
+    return left
+  })()
+
+  let submitButtonText = service === 'captionAI' ? 'Generate captioned video' : 'Generate clips'
+  if (loading) {
+    submitButtonText = stage === 'finalizing' ? 'Finalizing…' : 'Uploading…'
+  }
+
+  useEffect(() => {
+    if (!activeVideoId) return
+
+    let cancelled = false
+    let lastStatus: JobUiStatus | null = null
+
+    const pollStatus = async () => {
+      try {
+        const statusRes = await fetch(`/api/video/metadata?videoId=${encodeURIComponent(activeVideoId)}`)
+        const statusJson = (await statusRes.json()) as VideoStatusResponse & MetadataErrorResponse
+
+        if (!statusRes.ok) {
+          throw new Error(statusJson.error || 'Failed to fetch processing status')
+        }
+
+        if (cancelled) return
+
+        setJobUiStatus(statusJson.uiStatus)
+        updateProjectStatus(activeVideoId, statusJson.uiStatus, statusJson.video.service)
+
+        if (statusJson.uiStatus !== lastStatus) {
+          if (statusJson.uiStatus === 'failed') {
+            toast.error(statusJson.message || 'Processing failed')
+            setActiveVideoId(null)
+          }
+          if (statusJson.uiStatus === 'done') {
+            toast.success('Processing completed')
+            setActiveVideoId(null)
+          }
+        }
+
+        lastStatus = statusJson.uiStatus
+      } catch (error) {
+        if (cancelled) return
+        const message = error instanceof Error ? error.message : 'Failed to fetch processing status'
+        toast.error(message)
+        setActiveVideoId(null)
+      }
+    }
+
+    void pollStatus()
+    const intervalId = globalThis.setInterval(() => {
+      void pollStatus()
+    }, 5000)
+
+    return () => {
+      cancelled = true
+      globalThis.clearInterval(intervalId)
+    }
+  }, [activeVideoId, updateProjectStatus])
+
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    void (async () => {
+      try {
+        const file = assertSingleVideoFile(acceptedFiles)
+
+        const duration = await readVideoDuration(file)
+        if (duration === null) {
+          toast.error('Failed to read video duration')
+          return
+        }
+
+        if (duration > MAX_DURATION) {
+          toast.error('Video too long. Maximum duration is 15 minutes')
+          return
+        }
+
+        if (needsThreeShorts(service) && duration < MIN_DURATION_FOR_THREE_SHORTS) {
+          toast.error('Video duration is too short for 3 clips. Use at least 3 minutes.')
+          return
+        }
+
+        setFiles([file])
+        setFileDuration(duration)
+        toast.success('Video file ready')
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Invalid file'
+        toast.error(message)
+      }
+    })()
+  }, [service])
+
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDrop,
     accept: { 'video/*': [] },
     noClick: true,
-    disabled: hasUrl,
     multiple: false,
     maxFiles: 1,
   })
+
+  const handleSubmit = async () => {
+    const validationError = getUploadValidationError(fileDuration, service)
+    if (validationError) {
+      toast.error(validationError)
+      return
+    }
+
+    const file = files[0]
+    if (!file) {
+      toast.error('Upload a video file first')
+      return
+    }
+
+    let toastId: string | number | undefined
+
+    try {
+      setLoading(true)
+      setUploadProgress(null)
+      setStage('uploading')
+      setUploadStartedAt(Date.now())
+
+      toastId = toast.loading('Uploading video…')
+
+      const source = await resolveSource({
+        file,
+        service,
+        setUploadProgress,
+      })
+
+      setStage('finalizing')
+      setUploadProgress(null)
+      toast.loading('Finalizing…', { id: toastId })
+
+      const payload: VideoMetadataRequest = {
+        originalUrl: source.originalUrl,
+        duration: source.duration,
+        service,
+      }
+      if (language.trim().length > 0) {
+        payload.language = language.trim()
+      }
+
+      const metadata = await saveVideoMetadata(payload)
+
+      if (metadata.video) {
+        const nextProject: DashboardProject = {
+          id: metadata.video.id,
+          originalUrl: metadata.video.originalUrl,
+          status: 'queued',
+          service,
+          createdAt: new Date(metadata.video.createdAt).toISOString(),
+        }
+        prependProject(nextProject)
+        updateProjectStatus(metadata.video.id, 'queued', service)
+        setActiveVideoId(metadata.video.id)
+        setJobUiStatus('queued')
+      }
+
+      toast.success('Uploaded. Processing started.', { id: toastId })
+      setFiles([])
+      setFileDuration(null)
+    } catch (err) {
+      let message = 'Something went wrong'
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        message = 'Timed out while saving. Please try again.'
+      } else if (err instanceof Error) {
+        message = err.message
+      }
+      if (toastId === undefined) {
+        toast.error(message)
+        return
+      }
+      toast.error(message, { id: toastId })
+    } finally {
+      setLoading(false)
+      setUploadProgress(null)
+      setStage('idle')
+      setUploadStartedAt(null)
+    }
+  }
 
   return (
     <div className="min-h-fit bg-background flex flex-col items-center justify-center p-4 font-sans">
@@ -76,59 +390,66 @@ export default function Uploader() {
       <div
         {...getRootProps()}
         className={cn(
-          'w-full max-w-xl bg-background border dark:border-foreground border-border/10 rounded-2xl p-6 shadow-2xl transition-all duration-300 relative overflow-hidden',
-          isDragActive && !hasUrl ? 'ring-2 ring-purple-500 bg-primary/20' : '',
-          hasUrl ? 'opacity-80 cursor-not-allowed' : ''
+          'w-full max-w-2xl bg-background border border-border/30 rounded-2xl p-6 shadow-2xl transition-all duration-300 relative overflow-hidden',
+          isDragActive ? 'ring-2 ring-primary/60 bg-primary/10' : ''
         )}
       >
         <input {...getInputProps()} className="hidden" />
 
-        {isDragActive && !hasUrl && (
+        {isDragActive && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
             <div className="text-center">
-              <Upload className="w-12 h-12 mx-auto mb-4 text-purple-500 animate-bounce" />
+              <Upload className="w-12 h-12 mx-auto mb-4 text-primary animate-bounce" />
               <p className="text-xl font-medium">Drop video file here</p>
-              <p className="text-xl font-medium text-accent-foreground">
-                video file up to 500MB, maximum duration of 15 minutes
+              <p className="text-sm font-medium text-muted-foreground mt-1">
+                Drag a file (mp4, mov, webm) here, Video up to 500MB, maximum duration of 15 minutes
               </p>
             </div>
           </div>
         )}
 
-        <div className="space-y-3 relative z-10">
-          {/* URL INPUT */}
-          <div className="relative group">
-            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/40 group-focus-within:text-foreground/80 transition-colors">
-              <LinkIcon className="w-5 h-5" />
-            </div>
-            <Input
-              type="text"
-              placeholder="Drop a Zoom link"
-              disabled={hasFile}
-              className="w-full bg-background border-border h-14 pl-12 pr-4 rounded-[5px] text-lg placeholder:text-foreground/30 disabled:opacity-50 disabled:cursor-not-allowed"
-              value={url}
-              onChange={(e) => {
-                setUrl(e.target.value)
-                if (files.length) setFiles([])
-              }}
-              onKeyDown={(e) => e.stopPropagation()}
-            />
+        <div className="space-y-4 relative z-10">
+          <div className="mx-auto w-fit rounded-md bg-muted text-foreground/80 px-3 py-1 text-sm">
+            Upload only: video file to Cloudinary.
           </div>
 
-          {/* UPLOAD BUTTON */}
+          <div className="grid md:grid-cols-2 gap-3">
+            <label className="text-sm text-foreground/70">
+              <span>Service</span>
+              <select
+                className="mt-2 w-full bg-background border border-border/60 h-11 px-3 rounded-xl text-base"
+                value={service}
+                onChange={(event) => setService(event.target.value as VideoService)}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <option value="captionAI">captionAI (caption full video)</option>
+                <option value="clipAI">clipAI (3 viral clips)</option>
+                <option value="captionClipAI">captionClipAI (3 clips + captions)</option>
+              </select>
+            </label>
+
+            <label className="text-sm text-foreground/70">
+              <span>Language (optional)</span>
+              <Input
+                type="text"
+                placeholder="en"
+                className="mt-2 h-11 rounded-xl"
+                value={language}
+                onChange={(event) => setLanguage(event.target.value)}
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              />
+            </label>
+          </div>
+
           <div className="flex items-center gap-6">
             <Button
               type="button"
               variant="ghost"
-              disabled={hasUrl}
-              className="flex rounded-[5px] items-center gap-2 text-foreground/80 hover:text-foreground transition-colors text-md font-semibold disabled:opacity-40 disabled:cursor-not-allowed group"
+              className="flex rounded-[5px] items-center gap-2 text-foreground/80 hover:text-foreground transition-colors text-base font-semibold group p-0"
               onClick={(e) => {
                 e.stopPropagation()
-                if (hasUrl) return
-                const input = document.querySelector(
-                  'input[type="file"]'
-                ) as HTMLInputElement
-                input?.click()
+                open()
               }}
             >
               <Upload className="w-4 h-4 group-hover:-translate-y-0.5 transition-transform" />
@@ -136,50 +457,53 @@ export default function Uploader() {
             </Button>
           </div>
 
-          {/* FILE DISPLAY */}
           {hasFile && (
-            <div className="bg-white/5 p-3 rounded-lg flex items-center gap-3">
-              <FileVideo className="text-purple-400 w-5 h-5" />
-              <span className="text-sm truncate flex-1">
-                {files[0].name}
-              </span>
+            <div className="border border-border/40 rounded-[10px] p-4 flex items-center gap-3">
+              <FileVideo className="text-foreground/70 w-5 h-5" />
+              <span className="text-2xl truncate flex-1 text-foreground/80">{files[0].name}</span>
               <button
                 onClick={(e) => {
                   e.stopPropagation()
                   setFiles([])
+                  setFileDuration(null)
                   toast.info('File removed')
                 }}
-                className="text-foreground/40 text-xl hover:text-foreground"
+                className="text-base text-foreground/80 underline underline-offset-4 hover:text-foreground"
               >
-                ×
+                Remove
               </button>
             </div>
           )}
 
-          {/* MAIN CTA */}
+          {activeVideoId && jobUiStatus && (
+            <div className="text-sm text-foreground/70 rounded-md border border-border/40 px-3 py-2">
+              Processing status: {jobUiStatus}
+            </div>
+          )}
+
+          {hasFile && stage === 'uploading' && uploadProgress !== null && (
+            <div className="flex items-center justify-between text-2xl px-1">
+              <div className="flex items-center gap-2 text-emerald-400">
+                <LoaderCircle className="w-5 h-5 animate-spin" />
+                <span>Uploading {uploadProgress.toFixed(1)} %</span>
+              </div>
+              <span className="text-foreground/80 text-2xl">
+                {uploadEta === null ? 'Calculating...' : `${uploadEta} seconds left`}
+              </span>
+              <span className="text-foreground text-2xl">Cancel</span>
+            </div>
+          )}
+
           <Button
-            className="w-full bg-primary z-50 hover:bg-primary/80 h-14 rounded-[5px] text-lg font-bold shadow-[0_0_20px_rgba(255,255,255,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.2)] transition-all transform"
+            className="w-full bg-primary z-50 hover:bg-primary/80 h-14 rounded-xl text-lg font-bold"
             onClick={(e) => {
               e.stopPropagation()
-              if (!hasFile && !hasUrl) {
-                toast.error('Upload a file or provide a link first')
-                return
-              }
-              toast.success('Processing started')
+              handleSubmit()
             }}
+            disabled={loading}
           >
-            Get clips in 1 click
+            {submitButtonText}
           </Button>
-
-          {/* FOOTER */}
-          <div className="text-center pt-2">
-            <Link
-              href="#"
-              className="text-foreground/40 underline-offset-4 hover:text-foreground transition-all text-xs"
-            >
-              Click here to try a sample project
-            </Link>
-          </div>
         </div>
       </div>
     </div>
